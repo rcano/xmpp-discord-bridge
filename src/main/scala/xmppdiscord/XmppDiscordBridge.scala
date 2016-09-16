@@ -18,6 +18,8 @@ import sx.blah.discord.handle.impl.events.MessageReceivedEvent
 import sx.blah.discord.handle.impl.events.ReadyEvent
 import sx.blah.discord.handle.obj.IChannel
 
+import RegexExtractor._
+
 object XmppDiscordBridge extends App {
 
   case class Clargs(discordToken: String = null, user: String = null, xmppServer: String = null, domain: String = null, xmppPort: Int = 5222, domainAndResource: Option[String] = None)
@@ -30,8 +32,8 @@ object XmppDiscordBridge extends App {
     arg[String]("<server>").action((x, c) => c.copy(xmppServer = x)).text("xmpp server, e.g. talk.google.com")
     arg[String]("<domain>").action((x, c) => c.copy(domain = x)).text("xmpp domain, e.g. gmail.com")
     arg[String]("port").action((x, c) => c.copy(xmppPort = x.toInt)).optional.
-      validate(x => Try{x.toInt; ()}.toOption.toRight("port must be an integer")).
-      text("xmpp port, e.g. 5222")
+    validate(x => Try{x.toInt; ()}.toOption.toRight("port must be an integer")).
+    text("xmpp port, e.g. 5222")
   }.parse(args, new Clargs()).getOrElse(sys.exit(1))
 
   val passwd = System.console.readPassword("password: ")
@@ -72,17 +74,18 @@ object XmppDiscordBridge extends App {
   def registerOrCreateChannel(contact: Contact): Unit = {
     Option(contact.getName).orElse(scala.util.Try(vcardManager.getVCard(contact.getJid).getResult).map(_.getFormattedName).toOption) match {
       case Some(name) =>
+        val contactWithName = new Contact(contact.getJid, name, contact.isPending, contact.isApproved, contact.getSubscription, contact.getGroups)
         val newChannel = (name.split(" ").map(_.capitalize).mkString + "-" + contact.getJid).replace('á', 'a').replace('í', 'i').replace('ú', 'u').
-          replace('é', 'e').replace('ó', 'o').replaceAll("[^a-zA-Z0-9]", "-").dropWhile(c => c == '-' || c == '_').toLowerCase
+        replace('é', 'e').replace('ó', 'o').replaceAll("[^a-zA-Z0-9]", "-").dropWhile(c => c == '-' || c == '_').toLowerCase
         allChannels.find(_.getName == newChannel) match {
           case Some(c) =>
             println(c + " already created")
-            contactsToChannels += (contact -> c)
+            contactsToChannels += (contactWithName -> c)
           case _ =>
             println("Creating channel " + newChannel)
             val c = hangoutsGuild.createChannel(newChannel)
             println("done")
-            contactsToChannels += (contact -> c)
+            contactsToChannels += (contactWithName -> c)
         }
 
       case _ =>
@@ -99,23 +102,42 @@ object XmppDiscordBridge extends App {
 
   //configure bidirectional messaging by forwarding messages from discord to xmpp and viceversa
   xmppClient.addInboundMessageListener(consumer { evt =>
-      val msg = evt.getMessage
-      println("Received msg " + msg)
-      if (msg.isNormal || msg.getType == Message.Type.CHAT && msg.getBody != null && msg.getBody.nonEmpty)
-        contactsToChannels.get(rosterManager getContact msg.getFrom) foreach (_.sendMessage(msg.getBody))
+      try {
+        val msg = evt.getMessage
+        if (msg.isNormal || msg.getType == Message.Type.CHAT && msg.getBody != null && msg.getBody.nonEmpty)
+          contactsToChannels.get(rosterManager getContact msg.getFrom) foreach (_.sendMessage(msg.getBody))
+      } catch {
+        case e: Exception =>
+          e.printStackTrace()
+          Try(generalChannel.sendMessage(e.toString))
+      }
     })
 
   discordClient.getDispatcher.registerListener(listener[MessageReceivedEvent] { evt =>
-      if (evt.getMessage.getChannel.getID == generalChannel.getID) { //handle command
-        evt.getMessage.getContent match {
-          case "/delete all channels" =>
-            allChannels foreach (c => Try(c.delete()).failed.foreach(ex => Try(generalChannel.sendMessage(s"Failed to delete channel $c due to $ex"))))
-          case "/delete created channels" =>
-            println("deleting created channels")
-            contactsToChannels.values foreach (c => Try(c.delete()).failed.foreach(ex => Try(generalChannel.sendMessage(s"Failed to delete channel $c due to $ex"))))
+      try {
+        if (evt.getMessage.getChannel.getID == generalChannel.getID) { //handle command
+          evt.getMessage.getContent match {
+            case "/delete all channels" =>
+              allChannels foreach (c => Try(c.delete()).failed.foreach(ex => Try(generalChannel.sendMessage(s"Failed to delete channel $c due to $ex"))))
+            case "/delete created channels" =>
+              println("deleting created channels")
+              contactsToChannels.values foreach (c => Try(c.delete()).failed.foreach(ex => Try(generalChannel.sendMessage(s"Failed to delete channel $c due to $ex"))))
+
+            case regex"/find (.+)$userName" =>
+              val patt = ".*?" + userName.toLowerCase + ".*"
+              val foundUsers = contactsToChannels.filter(c => c._1.getName.toLowerCase.matches(patt) || c._1.toString.matches(patt))
+              if (foundUsers.isEmpty) generalChannel.sendMessage(s"No user found for $userName")
+              else generalChannel.sendMessage(foundUsers.map(u => u._1.getName + ": " + u._2.mention).mkString("\n"))
+          }
+
+          //handle p2p messages
+        } else contactsToChannels.find(_._2.getID == evt.getMessage.getChannel.getID) foreach {
+          case (contact, _) => xmppClient.sendMessage(new Message(contact.getJid, Message.Type.CHAT, evt.getMessage.getContent))
         }
-      } else contactsToChannels.find(_._2.getID == evt.getMessage.getChannel.getID) foreach {
-        case (contact, _) => xmppClient.sendMessage(new Message(contact.getJid, Message.Type.CHAT, evt.getMessage.getContent))
+      } catch {
+        case e: Exception =>
+          e.printStackTrace()
+          Try(generalChannel.sendMessage(e.toString))
       }
     })
 
