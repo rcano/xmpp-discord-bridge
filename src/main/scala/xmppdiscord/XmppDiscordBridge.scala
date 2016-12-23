@@ -14,11 +14,11 @@ import scala.concurrent.SyncVar
 import scala.util.Try
 import sx.blah.discord.api.{ClientBuilder => DiscordClientBuilder}
 import sx.blah.discord.api.events.{Event, IListener}
-import sx.blah.discord.handle.impl.events.MessageReceivedEvent
-import sx.blah.discord.handle.impl.events.ReadyEvent
+import sx.blah.discord.handle.impl.events.{MessageReceivedEvent, MessageUpdateEvent, ReadyEvent}
 import sx.blah.discord.handle.obj.IChannel
 
 import RegexExtractor._
+import sx.blah.discord.handle.obj.IMessage
 
 object XmppDiscordBridge extends App {
 
@@ -41,7 +41,7 @@ object XmppDiscordBridge extends App {
   def consumer[T](f: T => Any) = new Consumer[T] { def accept(t) = f(t) }
   def listener[T <: Event](f: T => Any) = new IListener[T] { def handle(t) = f(t) }
 
-  val discordClient = new DiscordClientBuilder().withToken(clargs.discordToken).setDaemon(true).login()
+  val discordClient = new DiscordClientBuilder().withToken(clargs.discordToken).login()
   val readyLatch = new SyncVar[Unit]()
   discordClient.getDispatcher.registerTemporaryListener(listener[ReadyEvent](e => readyLatch.put(())))
 
@@ -70,7 +70,7 @@ object XmppDiscordBridge extends App {
   val allChannels = hangoutsGuild.getChannels.asScala
   val generalChannel = allChannels.find(_.getName == "general").getOrElse(hangoutsGuild.createChannel("general"))
 
-  @volatile var contactsToChannels: Map[Contact, IChannel] = Map.empty
+  @volatile var contactsToChannels: Map[Jid, IChannel] = Map.empty
   def registerOrCreateChannel(contact: Contact): Unit = {
     Option(contact.getName).orElse(scala.util.Try(vcardManager.getVCard(contact.getJid).getResult).map(_.getFormattedName).toOption) match {
       case Some(name) =>
@@ -80,12 +80,12 @@ object XmppDiscordBridge extends App {
         allChannels.find(_.getName == newChannel) match {
           case Some(c) =>
             println(c + " already created")
-            contactsToChannels += (contactWithName -> c)
+            contactsToChannels += (contact.getJid -> c)
           case _ =>
             println("Creating channel " + newChannel)
             val c = hangoutsGuild.createChannel(newChannel)
             println("done")
-            contactsToChannels += (contactWithName -> c)
+            contactsToChannels += (contact.getJid -> c)
         }
 
       case _ =>
@@ -100,12 +100,19 @@ object XmppDiscordBridge extends App {
   contactsToChannels foreach println
   rosterManager.addRosterListener(consumer(_.getAddedContacts.asScala foreach registerOrCreateChannel))
 
+  def withChannel(jid: Jid)(f: IChannel => Any): Unit = contactsToChannels.get(jid) match {
+    case Some(c) => f(c)
+    case _ => println(Console.RED + s"Channel not found for user $jid. This should not happen" + Console.RESET)
+  }
+  
   //configure bidirectional messaging by forwarding messages from discord to xmpp and viceversa
   xmppClient.addInboundMessageListener(consumer { evt =>
       try {
         val msg = evt.getMessage
         if (msg.isNormal || msg.getType == Message.Type.CHAT && msg.getBody != null && msg.getBody.nonEmpty)
-          contactsToChannels.get(rosterManager getContact msg.getFrom) foreach (_.sendMessage(msg.getBody))
+          withChannel(msg.getFrom.asBareJid)(_.sendMessage(msg.getBody))
+        else 
+          println("Ignoring message " + msg)
       } catch {
         case e: Exception =>
           e.printStackTrace()
@@ -113,33 +120,37 @@ object XmppDiscordBridge extends App {
       }
     })
 
-  discordClient.getDispatcher.registerListener(listener[MessageReceivedEvent] { evt =>
-      try {
-        if (evt.getMessage.getChannel.getID == generalChannel.getID) { //handle command
-          evt.getMessage.getContent match {
-            case "/delete all channels" =>
-              allChannels foreach (c => Try(c.delete()).failed.foreach(ex => Try(generalChannel.sendMessage(s"Failed to delete channel $c due to $ex"))))
-            case "/delete created channels" =>
-              println("deleting created channels")
-              contactsToChannels.values foreach (c => Try(c.delete()).failed.foreach(ex => Try(generalChannel.sendMessage(s"Failed to delete channel $c due to $ex"))))
+  //handle incoming discord messages
+  def handleDiscordMessage(msg: IMessage) {
+    try {
+      if (msg.getChannel.getID == generalChannel.getID) { //handle command
+        msg.getContent match {
+          case "/delete all channels" =>
+            allChannels foreach (c => Try(c.delete()).failed.foreach(ex => Try(generalChannel.sendMessage(s"Failed to delete channel $c due to $ex"))))
+          case "/delete created channels" =>
+            println("deleting created channels")
+            contactsToChannels.values foreach (c => Try(c.delete()).failed.foreach(ex => Try(generalChannel.sendMessage(s"Failed to delete channel $c due to $ex"))))
 
-            case regex"/find (.+)$userName" =>
-              val patt = ".*?" + userName.toLowerCase + ".*"
-              val foundUsers = contactsToChannels.filter(c => c._1.getName.toLowerCase.matches(patt) || c._1.toString.matches(patt))
-              if (foundUsers.isEmpty) generalChannel.sendMessage(s"No user found for $userName")
-              else generalChannel.sendMessage(foundUsers.map(u => u._1.getName + ": " + u._2.mention).mkString("\n"))
-          }
-
-          //handle p2p messages
-        } else contactsToChannels.find(_._2.getID == evt.getMessage.getChannel.getID) foreach {
-          case (contact, _) => xmppClient.sendMessage(new Message(contact.getJid, Message.Type.CHAT, evt.getMessage.getContent))
+          case regex"/find (.+)$userName" =>
+            val patt = ".*?" + userName.toLowerCase + ".*"
+            val foundUsers = rosterManager.getContacts.asScala.filter(c => c.getName.toLowerCase.matches(patt) || c.toString.matches(patt)).
+            flatMap(c => contactsToChannels.get(c.getJid).map(c -> _))
+            if (foundUsers.isEmpty) generalChannel.sendMessage(s"No user found for $userName")
+            else generalChannel.sendMessage(foundUsers.map(u => u._1.getName + ": " + u._2.mention).mkString("\n"))
         }
-      } catch {
-        case e: Exception =>
-          e.printStackTrace()
-          Try(generalChannel.sendMessage(e.toString))
+
+        //handle p2p messages
+      } else contactsToChannels.find(_._2.getID == msg.getChannel.getID) foreach {
+        case (jid, _) => xmppClient.sendMessage(new Message(jid, Message.Type.CHAT, msg.getContent))
       }
-    })
+    } catch {
+      case e: Exception =>
+        e.printStackTrace()
+        Try(generalChannel.sendMessage(e.toString))
+    }
+  }
+  discordClient.getDispatcher.registerListener(listener[MessageReceivedEvent](evt => handleDiscordMessage(evt.getMessage)))
+  discordClient.getDispatcher.registerListener(listener[MessageUpdateEvent](evt => handleDiscordMessage(evt.getNewMessage)))
 
   //handle presence events
   val presenceManager = xmppClient.getManager(classOf[PresenceManager])
@@ -147,12 +158,11 @@ object XmppDiscordBridge extends App {
     val from = rosterManager.getContact(presence.getFrom)
     println(s"Processing presence from $from: $presence")
     presence.getType match {
-      case null => contactsToChannels.get(from) foreach (_.changeTopic(s"${presence.getShow}: ${presence.getStatus}"))
+      case null => withChannel(from.getJid.asBareJid)(_.changeTopic(s"${presence.getShow}: ${presence.getStatus}"))
       case Presence.Type.SUBSCRIBE | Presence.Type.UNSUBSCRIBE =>
         generalChannel.sendMessage(s"$from wishes to ${presence.getType}")
       case Presence.Type.UNAVAILABLE => //not useful event
-      case _ =>
-        contactsToChannels.get(from) foreach (_.sendMessage(s"$from: " + presence.getType))
+      case _ => withChannel(from.getJid.asBareJid)(_.sendMessage(s"$from: " + presence.getType))
     }
   }.failed foreach (ex => Try(generalChannel.sendMessage(s"Failed to update presence $presence due to $ex")))
   xmppClient.addInboundPresenceListener(consumer(evt => processPresence(evt.getPresence)))
