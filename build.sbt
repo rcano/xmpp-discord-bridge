@@ -13,7 +13,7 @@ scalacOptions ++= Seq("-deprecation", "-feature", "-Xexperimental", "-Yinfer-arg
 libraryDependencies ++= Seq(
   "net.databinder.dispatch" %% "dispatch-core" % "0.11.3",
   "org.json4s" %% "json4s-native" % "3.5.0",
-  "com.github.austinv11" % "Discord4j" % "2.7.0",
+  "com.github.austinv11" % "Discord4j" % "df724d5",
   "com.github.scopt" %% "scopt" % "3.5.0",
   "rocks.xmpp" % "xmpp-core-client" % "0.7.2",
   "rocks.xmpp" % "xmpp-extensions-client" % "0.7.2",
