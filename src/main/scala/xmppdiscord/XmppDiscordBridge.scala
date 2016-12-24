@@ -155,7 +155,7 @@ object XmppDiscordBridge extends App {
   val presenceManager = xmppClient.getManager(classOf[PresenceManager])
   def processPresence(presence: Presence): Unit = Try {
     val from = rosterManager.getContact(presence.getFrom)
-    println(s"Processing presence from $from: $presence")
+    if (from.getJid == null) return
     presence.getType match {
       case null => withChannel(from.getJid.asBareJid)(_._2.changeTopic(s"${presence.getShow}: ${presence.getStatus}"))
       case Presence.Type.SUBSCRIBE | Presence.Type.UNSUBSCRIBE =>
@@ -163,7 +163,10 @@ object XmppDiscordBridge extends App {
       case Presence.Type.UNAVAILABLE => //not useful event
       case _ => withChannel(from.getJid.asBareJid)(_._2.sendMessage(s"$from: " + presence.getType))
     }
-  }.failed foreach (ex => Try(generalChannel.sendMessage(s"Failed to update presence $presence due to $ex")))
+  }.failed foreach { ex =>
+    ex.printStackTrace()
+    Try(generalChannel.sendMessage(s"Failed to update presence $presence due to $ex"))
+  }
   xmppClient.addInboundPresenceListener(consumer(evt => processPresence(evt.getPresence)))
   rosterManager.getContacts.asScala.foreach(c => processPresence(presenceManager.getPresence(c.getJid)))
 }
