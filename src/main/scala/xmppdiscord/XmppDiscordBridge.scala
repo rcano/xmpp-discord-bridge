@@ -155,7 +155,7 @@ object XmppDiscordBridge extends App {
   val presenceManager = xmppClient.getManager(classOf[PresenceManager])
   def processPresence(presence: Presence): Unit = Try {
     val from = rosterManager.getContact(presence.getFrom)
-    if (from.getJid == null) return
+    if (from == null) return
     presence.getType match {
       case null => withChannel(from.getJid.asBareJid)(_._2.changeTopic(s"${presence.getShow}: ${presence.getStatus}"))
       case Presence.Type.SUBSCRIBE | Presence.Type.UNSUBSCRIBE =>
