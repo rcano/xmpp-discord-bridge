@@ -14,7 +14,8 @@ import scala.concurrent.SyncVar
 import scala.util.Try
 import sx.blah.discord.api.{ClientBuilder => DiscordClientBuilder}
 import sx.blah.discord.api.events.{Event, IListener}
-import sx.blah.discord.handle.impl.events.{MessageReceivedEvent, MessageUpdateEvent, ReadyEvent}
+import sx.blah.discord.handle.impl.events.ReadyEvent
+import sx.blah.discord.handle.impl.events.guild.channel.message.{MessageReceivedEvent, MessageUpdateEvent}
 import sx.blah.discord.handle.obj.IChannel
 
 import RegexExtractor._
@@ -38,12 +39,10 @@ object XmppDiscordBridge extends App {
 
   val passwd = System.console.readPassword("password: ")
 
-  def consumer[T](f: T => Any) = new Consumer[T] { def accept(t) = f(t) }
-  def listener[T <: Event](f: T => Any) = new IListener[T] { def handle(t) = f(t) }
 
   val discordClient = new DiscordClientBuilder().withToken(clargs.discordToken).login()
   val readyLatch = new SyncVar[Unit]()
-  discordClient.getDispatcher.registerTemporaryListener(listener[ReadyEvent](e => readyLatch.put(())))
+  discordClient.getDispatcher.registerTemporaryListener((e: ReadyEvent) => readyLatch.put(()))
 
   val connConf = TcpConnectionConfiguration.builder.hostname(clargs.xmppServer).port(clargs.xmppPort).build()
   val xmppClient = XmppClient.create(clargs.domain, connConf)
@@ -56,7 +55,7 @@ object XmppDiscordBridge extends App {
   }
   
   val res = xmppClient.login(clargs.user, new String(passwd))
-  println(res.toSeq)
+  if (res != null) println(res.mkString(", "))
 
   println("Contacts:")
   val roster = rosterManager.requestRoster().getResult
@@ -98,7 +97,7 @@ object XmppDiscordBridge extends App {
 
   println("All contacts channels")
   contactsToChannels foreach println
-  rosterManager.addRosterListener(consumer(_.getAddedContacts.asScala foreach registerOrCreateChannel))
+  rosterManager.addRosterListener(_.getAddedContacts.asScala foreach registerOrCreateChannel)
 
   def withChannel(jid: Jid)(f: ((Contact, IChannel)) => Any): Unit = contactsToChannels.get(jid) match {
     case Some(c) => f(c)
@@ -106,7 +105,7 @@ object XmppDiscordBridge extends App {
   }
   
   //configure bidirectional messaging by forwarding messages from discord to xmpp and viceversa
-  xmppClient.addInboundMessageListener(consumer { evt =>
+  xmppClient.addInboundMessageListener { evt =>
       try {
         val msg = evt.getMessage
         if (msg.isNormal || msg.getType == Message.Type.CHAT && msg.getBody != null && msg.getBody.nonEmpty)
@@ -118,7 +117,7 @@ object XmppDiscordBridge extends App {
           e.printStackTrace()
           Try(generalChannel.sendMessage(e.toString))
       }
-    })
+    }
 
   //handle incoming discord messages
   def handleDiscordMessage(msg: IMessage) {
@@ -148,8 +147,8 @@ object XmppDiscordBridge extends App {
         Try(generalChannel.sendMessage(e.toString))
     }
   }
-  discordClient.getDispatcher.registerListener(listener[MessageReceivedEvent](evt => handleDiscordMessage(evt.getMessage)))
-  discordClient.getDispatcher.registerListener(listener[MessageUpdateEvent](evt => handleDiscordMessage(evt.getNewMessage)))
+  discordClient.getDispatcher.registerListener((evt: MessageReceivedEvent) => handleDiscordMessage(evt.getMessage))
+  discordClient.getDispatcher.registerListener((evt: MessageUpdateEvent) => handleDiscordMessage(evt.getNewMessage))
 
   //handle presence events
   val presenceManager = xmppClient.getManager(classOf[PresenceManager])
@@ -167,6 +166,6 @@ object XmppDiscordBridge extends App {
     ex.printStackTrace()
     Try(generalChannel.sendMessage(s"Failed to update presence $presence due to $ex"))
   }
-  xmppClient.addInboundPresenceListener(consumer(evt => processPresence(evt.getPresence)))
+  xmppClient.addInboundPresenceListener(evt => processPresence(evt.getPresence))
   rosterManager.getContacts.asScala.foreach(c => processPresence(presenceManager.getPresence(c.getJid)))
 }

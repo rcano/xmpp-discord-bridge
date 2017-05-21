@@ -4,19 +4,17 @@ organization := "xmppdiscord"
 
 version := "0.1-SNAPSHOT"
 
-scalaVersion := "2.11.8"
+scalaVersion := "2.12.2"
 
 fork := true
 
 scalacOptions ++= Seq("-deprecation", "-feature", "-Xexperimental", "-Yinfer-argument-types", "-Xlint")
 
 libraryDependencies ++= Seq(
-  "net.databinder.dispatch" %% "dispatch-core" % "0.11.3",
-  "org.json4s" %% "json4s-native" % "3.5.0",
-  "com.github.austinv11" % "Discord4j" % "df724d5",
+  "com.github.austinv11" % "Discord4j" % "2.8.1",
   "com.github.scopt" %% "scopt" % "3.5.0",
-  "rocks.xmpp" % "xmpp-core-client" % "0.7.2",
-  "rocks.xmpp" % "xmpp-extensions-client" % "0.7.2",
+  "rocks.xmpp" % "xmpp-core-client" % "0.7.4",
+  "rocks.xmpp" % "xmpp-extensions-client" % "0.7.4",
   "com.github.jnr" % "jnr-ffi" % "2.1.2",
   "com.chuusai" %% "shapeless" % "2.3.2"
 )
