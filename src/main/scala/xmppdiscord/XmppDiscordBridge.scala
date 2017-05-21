@@ -106,18 +106,18 @@ object XmppDiscordBridge extends App {
   
   //configure bidirectional messaging by forwarding messages from discord to xmpp and viceversa
   xmppClient.addInboundMessageListener { evt =>
-      try {
-        val msg = evt.getMessage
-        if (msg.isNormal || msg.getType == Message.Type.CHAT && msg.getBody != null && msg.getBody.nonEmpty)
-          withChannel(msg.getFrom.asBareJid)(_._2.sendMessage(msg.getBody))
-        else 
-          println("Ignoring message " + msg)
-      } catch {
-        case e: Exception =>
-          e.printStackTrace()
-          Try(generalChannel.sendMessage(e.toString))
-      }
+    try {
+      val msg = evt.getMessage
+      if (msg.isNormal || msg.getType == Message.Type.CHAT && msg.getBody != null && msg.getBody.nonEmpty)
+        withChannel(msg.getFrom.asBareJid)(_._2.sendMessage(msg.getBody))
+      else 
+        println("Ignoring message " + msg)
+    } catch {
+      case e: Exception =>
+        e.printStackTrace()
+        Try(generalChannel.sendMessage(e.toString))
     }
+  }
 
   //handle incoming discord messages
   def handleDiscordMessage(msg: IMessage) {
@@ -135,6 +135,8 @@ object XmppDiscordBridge extends App {
             val foundUsers = contactsToChannels.values.filter { case (c, _) => c.getName.toLowerCase.matches(patt) || c.toString.matches(patt) }
             if (foundUsers.isEmpty) generalChannel.sendMessage(s"No user found for $userName")
             else generalChannel.sendMessage(foundUsers.map(u => u._1.getName + ": " + u._2.mention).mkString("\n"))
+            
+          case other =>
         }
 
         //handle p2p messages
@@ -147,8 +149,11 @@ object XmppDiscordBridge extends App {
         Try(generalChannel.sendMessage(e.toString))
     }
   }
-  discordClient.getDispatcher.registerListener((evt: MessageReceivedEvent) => handleDiscordMessage(evt.getMessage))
-  discordClient.getDispatcher.registerListener((evt: MessageUpdateEvent) => handleDiscordMessage(evt.getNewMessage))
+  discordClient.getDispatcher.registerListener({
+      case evt: MessageReceivedEvent => handleDiscordMessage(evt.getMessage)
+      case evt: MessageUpdateEvent => handleDiscordMessage(evt.getNewMessage)
+      case other => 
+    }: IListener[Event])
 
   //handle presence events
   val presenceManager = xmppClient.getManager(classOf[PresenceManager])
