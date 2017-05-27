@@ -141,7 +141,11 @@ object XmppDiscordBridge extends App {
 
         //handle p2p messages
       } else contactsToChannels.find(_._2._2.getID == msg.getChannel.getID) foreach {
-        case (jid, _) => xmppClient.sendMessage(new Message(jid, Message.Type.CHAT, msg.getContent))
+        case (jid, _) => 
+          xmppClient.sendMessage(new Message(jid, Message.Type.CHAT, msg.getContent))
+          msg.getAttachments.asScala.foreach { attachment => 
+            xmppClient.sendMessage(new Message(jid, Message.Type.CHAT, attachment.getFilename + "\n" + attachment.getUrl))
+          }
       }
     } catch {
       case e: Exception =>
