@@ -205,7 +205,8 @@ class XmppDiscordBridge(args: Array[String]) {
     println(Console.RED + "DETECTED NETWORK CONFIGURATION CHANGE, RECONNECTING..." + Console.RESET)
     Try(xmppClient.close())
     Try(jdaClient.shutdownNow())
-    Thread.sleep(1500) // give it some time before reconnecting
+    println("Waiting 10 seconds for the network to stabilize")
+    Thread.sleep(10000) // give it some time before reconnecting
     connect()
   }
 }
