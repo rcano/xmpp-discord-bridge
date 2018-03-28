@@ -19,6 +19,7 @@ import scala.annotation.tailrec
 import scala.collection.JavaConverters._
 import scala.concurrent.SyncVar
 import scala.util.Try
+import scala.util.control.Exception._
 
 import RegexExtractor._
 
@@ -54,7 +55,7 @@ class XmppDiscordBridge(args: Array[String]) {
     }
     val jdaClient = new JDABuilder(AccountType.BOT).setAudioEnabled(false).setAutoReconnect(true).
     addEventListener(awaitReady).setToken(clargs.discordToken).buildAsync()
-  
+    
     val connConf = TcpConnectionConfiguration.builder.hostname(clargs.xmppServer).port(clargs.xmppPort).build()
     val xmppClient = XmppClient.create(clargs.domain, connConf)
     val rosterManager = xmppClient.getManager(classOf[RosterManager])
@@ -84,8 +85,11 @@ class XmppDiscordBridge(args: Array[String]) {
       Option(contact.getName).orElse(scala.util.Try(vcardManager.getVCard(contact.getJid).getResult).map(_.getFormattedName).toOption) match {
         case Some(name) =>
           val contactWithName = new Contact(contact.getJid, name, contact.isPending, contact.isApproved, contact.getSubscription, contact.getGroups)
-          val newChannel = (name.split(" ").map(_.capitalize).mkString + "-" + contact.getJid).replace('á', 'a').replace('í', 'i').replace('ú', 'u').
-          replace('é', 'e').replace('ó', 'o').replaceAll("[^a-zA-Z0-9]", "-").dropWhile(c => c == '-' || c == '_').toLowerCase
+          val newChannel = (name.split(" ").mkString("_") + "-" + contact.getJid).
+            replace('á', 'a').replace('í', 'i').replace('ú', 'u').replace('é', 'e').replace('ó', 'o').
+            replaceAll("[^a-zA-Z0-9]", "-").replaceAll("--+", "-").
+            dropWhile(c => c == '-' || c == '_').toLowerCase
+            
           allChannels.find(_.getName == newChannel) match {
             case Some(c) =>
               println(c + " already created")
@@ -149,10 +153,17 @@ class XmppDiscordBridge(args: Array[String]) {
             if (msg.getChannel.getIdLong == generalChannel.getIdLong) { //handle command
               msg.getContent match {
                 case "/delete all channels" =>
-                  allChannels foreach (c => Try(c.delete()).failed.foreach(ex => Try(generalChannel.sendMessage(s"Failed to delete channel $c due to $ex"))))
+                  println("deleting all channels")
+                  (allChannels - generalChannel) foreach (c => 
+                      c.delete().queue(_ => println(s"channel $c deleted"), ex => generalChannel.sendMessage(s"Failed to delete channel $c due to $ex").queue()))
+                case "/delete all non bound channels" =>
+                  println("deleting non bound channels")
+                  (allChannels - generalChannel -- contactsToChannels.values.map(_._2)) foreach (c => 
+                      c.delete().queue(_ => println(s"channel $c deleted"), ex => generalChannel.sendMessage(s"Failed to delete channel $c due to $ex").queue()))
                 case "/delete created channels" =>
                   println("deleting created channels")
-                  contactsToChannels.values foreach (c => Try(c._2.delete()).failed.foreach(ex => Try(generalChannel.sendMessage(s"Failed to delete channel $c due to $ex"))))
+                  contactsToChannels.values.map(_._2) foreach (c => 
+                      c.delete().queue(_ => println(s"channel $c deleted"), ex => generalChannel.sendMessage(s"Failed to delete channel $c due to $ex").queue()))
 
                 case regex"/find (.+)$userName" =>
                   val patt = ".*?" + userName.toLowerCase + ".*"
@@ -199,7 +210,7 @@ class XmppDiscordBridge(args: Array[String]) {
     rosterManager.getContacts.asScala.foreach(c => processPresence(presenceManager.getPresence(c.getJid)))
     
     //just monitor the net from now on, if the network interfaces change, reconnect
-    while(java.net.NetworkInterface.getNetworkInterfaces.asScala.toArray sameElements networkOnStartup) {
+    while (java.net.NetworkInterface.getNetworkInterfaces.asScala.toArray sameElements networkOnStartup) {
       Thread.sleep(3000)
     }
     println(Console.RED + "DETECTED NETWORK CONFIGURATION CHANGE, RECONNECTING..." + Console.RESET)
@@ -207,6 +218,11 @@ class XmppDiscordBridge(args: Array[String]) {
     Try(jdaClient.shutdownNow())
     println("Waiting 10 seconds for the network to stabilize")
     Thread.sleep(10000) // give it some time before reconnecting
+    
+    while (catching(classOf[java.net.UnknownHostException]).opt(java.net.InetAddress.getAllByName("discordapp.com")).isEmpty) {
+      println(Console.RED + "still no network, waiting..." + Console.RESET)
+      Thread.sleep(1000)
+    }
     connect()
   }
 }
