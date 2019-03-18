@@ -54,7 +54,7 @@ class XmppDiscordBridge(args: Array[String]) {
       }
     }
     val jdaClient = new JDABuilder(AccountType.BOT).setAudioEnabled(false).setAutoReconnect(true).
-    addEventListener(awaitReady).setToken(clargs.discordToken).buildAsync()
+    addEventListener(awaitReady).setToken(clargs.discordToken).build()
     
     val connConf = TcpConnectionConfiguration.builder.hostname(clargs.xmppServer).port(clargs.xmppPort).build()
     val xmppClient = XmppClient.create(clargs.domain, connConf)
@@ -84,7 +84,7 @@ class XmppDiscordBridge(args: Array[String]) {
     def registerOrCreateChannel(contact: Contact): Unit = {
       Option(contact.getName).orElse(scala.util.Try(vcardManager.getVCard(contact.getJid).getResult).map(_.getFormattedName).toOption) match {
         case Some(name) =>
-          val contactWithName = new Contact(contact.getJid, name, contact.isPending, contact.isApproved, contact.getSubscription, contact.getGroups)
+          val contactWithName = new Contact(contact.getJid, name, contact.isPendingOut, contact.isApproved, contact.getSubscription, contact.getGroups)
           val newChannel = (name.split(" ").mkString("_") + "-" + contact.getJid).
             replace('á', 'a').replace('í', 'i').replace('ú', 'u').replace('é', 'e').replace('ó', 'o').
             replaceAll("[^a-zA-Z0-9]", "-").replaceAll("--+", "-").
@@ -151,7 +151,7 @@ class XmppDiscordBridge(args: Array[String]) {
         
           try {
             if (msg.getChannel.getIdLong == generalChannel.getIdLong) { //handle command
-              msg.getContent match {
+              msg.getContentDisplay match {
                 case "/delete all channels" =>
                   println("deleting all channels")
                   (allChannels - generalChannel) foreach (c => 
@@ -171,13 +171,13 @@ class XmppDiscordBridge(args: Array[String]) {
                   if (foundUsers.isEmpty) generalChannel.sendMessage(s"No user found for $userName")
                   else generalChannel.sendMessage(foundUsers.map(u => u._1.getName + ": " + u._2.getAsMention).mkString("\n")).queue()
             
-                case other =>
+                case _ =>
               }
 
               //handle p2p messages
             } else contactsToChannels.find(_._2._2.getIdLong == msg.getChannel.getIdLong) foreach {
               case (jid, _) => 
-                xmppClient.sendMessage(new Message(jid, Message.Type.CHAT, msg.getContent))
+                xmppClient.sendMessage(new Message(jid, Message.Type.CHAT, msg.getContentDisplay))
                 msg.getAttachments.asScala.foreach { attachment => 
                   xmppClient.sendMessage(new Message(jid, Message.Type.CHAT, attachment.getFileName + "\n" + attachment.getUrl))
                 }
