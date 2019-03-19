@@ -7,6 +7,7 @@ import javafx.geometry.Pos
 import javafx.scene.control.{ButtonType, ButtonBar, Dialog, PasswordField, Button, ProgressBar, Label}
 import javafx.scene.image.ImageView
 import javafx.scene.paint.Color
+import javafx.stage.Stage
 import rocks.xmpp.addr.Jid
 import rocks.xmpp.core.net.client.SocketConnectionConfiguration
 import rocks.xmpp.core.session.XmppClient
@@ -16,6 +17,7 @@ import tangerine._, JfxControls._
 class UserLoginDialog(user: String, xmppServer: String = null, domain: String = null, xmppPort: Int = 5222, domainAndResource: Option[String] = None) extends Dialog[(String, XmppClient)] {
   private val loginButtonType = new ButtonType("Login", ButtonBar.ButtonData.OK_DONE)
   getDialogPane.getButtonTypes.addAll(loginButtonType, ButtonType.CANCEL)
+  JfxUtils.showingProperty(getDialogPane).addListener((_, oldv, newv) => if (newv) getDialogPane.getScene.getWindow.asInstanceOf[Stage].setResizable(true))
   
   setGraphic(new ImageView("/hangouts.png").tap { iv => iv.setSmooth(true); iv.setFitWidth(200); iv.setPreserveRatio(true) })
   setTitle("Login with Hangouts password")
