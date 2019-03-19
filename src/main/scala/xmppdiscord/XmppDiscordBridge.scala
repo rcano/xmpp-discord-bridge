@@ -1,5 +1,6 @@
 package xmppdiscord
 
+import javafx.application.Platform
 import language.reflectiveCalls
 
 import net.dv8tion.jda.core.entities.{TextChannel, Message => DMessage, User}
@@ -17,7 +18,7 @@ import rocks.xmpp.im.roster.model.Contact
 import rocks.xmpp.im.subscription.PresenceManager
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
-import scala.concurrent.SyncVar
+import scala.concurrent._, duration._
 import scala.util.Try
 import scala.util.control.Exception._
 
@@ -40,7 +41,25 @@ class XmppDiscordBridge(args: Array[String]) {
     text("xmpp port, e.g. 5222")
   }.parse(args, new Clargs()).getOrElse(sys.exit(1))
 
-  val passwd = System.console.readPassword("password: ")
+  val trayIcon = new TrayIcon()
+  trayIcon.setup()
+  
+  var passwd: String = null
+  var xmppClient: XmppClient = null
+  val loadingPromise = Promise[Unit]()
+  Platform.startup(() => ())
+  Platform.runLater { () => 
+    new UserLoginDialog(clargs.user, clargs.xmppServer, clargs.domain, clargs.xmppPort, clargs.domainAndResource).showAndWait() match {
+      case opt if opt.isEmpty => sys.exit()
+      case opt => 
+        val (pwd, client) = opt.get
+        passwd = pwd
+        xmppClient = client
+        loadingPromise.success(())
+    }
+  }
+  Await.result(loadingPromise.future, Duration.Inf)
+  trayIcon.showConnected()
 
   connect()
   @tailrec private def connect(): Unit = {
@@ -57,18 +76,22 @@ class XmppDiscordBridge(args: Array[String]) {
     addEventListener(awaitReady).setToken(clargs.discordToken).build()
     
     val connConf = TcpConnectionConfiguration.builder.hostname(clargs.xmppServer).port(clargs.xmppPort).build()
-    val xmppClient = XmppClient.create(clargs.domain, connConf)
+    if (xmppClient == null) {
+      xmppClient = XmppClient.create(clargs.domain, connConf)
+      
+      clargs.domainAndResource.map(_.split("/")) match {
+        case Some(Array(domain, resource, _*)) => xmppClient.connect(Jid.ofDomainAndResource(domain, resource))
+        case _ => xmppClient.connect()
+      }
+      
+      val res = xmppClient.login(clargs.user, new String(passwd))
+      if (res != null) println(res.mkString(", "))
+    }
+    
     val rosterManager = xmppClient.getManager(classOf[RosterManager])
     val vcardManager = xmppClient.getManager(classOf[VCardManager])
-
-    clargs.domainAndResource.map(_.split("/")) match {
-      case Some(Array(domain, resource, _*)) => xmppClient.connect(Jid.ofDomainAndResource(domain, resource))
-      case _ => xmppClient.connect()
-    }
-  
-    val res = xmppClient.login(clargs.user, new String(passwd))
-    if (res != null) println(res.mkString(", "))
-
+    
+    trayIcon.showConnected()
     println("Contacts:")
 
     readyLatch.get
@@ -213,8 +236,10 @@ class XmppDiscordBridge(args: Array[String]) {
     while (java.net.NetworkInterface.getNetworkInterfaces.asScala.toArray sameElements networkOnStartup) {
       Thread.sleep(3000)
     }
+    trayIcon.showConnecting()
     println(Console.RED + "DETECTED NETWORK CONFIGURATION CHANGE, RECONNECTING..." + Console.RESET)
     Try(xmppClient.close())
+    xmppClient = null
     Try(jdaClient.shutdownNow())
     println("Waiting 10 seconds for the network to stabilize")
     Thread.sleep(10000) // give it some time before reconnecting

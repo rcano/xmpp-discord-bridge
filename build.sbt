@@ -50,7 +50,7 @@ scalacOptions in (Compile, console) --= Seq("-Ywarn-unused:_", "-opt:_", "-Xlint
 
 lazy val moduleJars = taskKey[Seq[(Attributed[File], java.lang.module.ModuleDescriptor)]]("moduleJars")
 moduleJars := {
-  val attributedJars = (Compile/dependencyClasspathAsJars).value.filterNot(_.metadata.get(moduleID.key).exists(_.organization == "org.scala-lang"))
+  val attributedJars = (Compile/dependencyClasspathAsJars).value.filterNot(_.metadata.get(moduleID.key).exists(m => m.organization == "org.scala-lang" || m.organization == "javax.xml.bind"))
   val modules = attributedJars.flatMap { aj =>
     try {
       val module = java.lang.module.ModuleFinder.of(aj.data.toPath).findAll().iterator.next.descriptor
