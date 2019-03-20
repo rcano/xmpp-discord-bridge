@@ -12,6 +12,7 @@ import rocks.xmpp.addr.Jid
 import rocks.xmpp.core.session._
 import rocks.xmpp.core.stanza.model.Message
 import rocks.xmpp.core.stanza.model.Presence
+import rocks.xmpp.extensions.offline.OfflineMessageManager
 import rocks.xmpp.extensions.vcard.temp.VCardManager
 import rocks.xmpp.im.roster.RosterManager
 import rocks.xmpp.im.roster.model.Contact
@@ -44,12 +45,24 @@ class XmppDiscordBridge(args: Array[String]) {
   val trayIcon = new TrayIcon()
   trayIcon.setup()
   
+  val connConf = TcpConnectionConfiguration.builder.hostname(clargs.xmppServer).port(clargs.xmppPort).build()
+  def connectedClient() = {
+    val xmppClient = XmppClient.create(clargs.domain, connConf)
+    xmppClient.enableFeature(classOf[OfflineMessageManager])
+      
+    clargs.domainAndResource.map(_.split("/")) match {
+      case Some(Array(domain, resource, _*)) => xmppClient.connect(Jid.ofDomainAndResource(domain, resource))
+      case _ => xmppClient.connect()
+    }
+    xmppClient
+  }
+  
   var passwd: String = null
   var xmppClient: XmppClient = null
   val loadingPromise = Promise[Unit]()
   Platform.startup(() => ())
   Platform.runLater { () => 
-    new UserLoginDialog(clargs.user, clargs.xmppServer, clargs.domain, clargs.xmppPort, clargs.domainAndResource).showAndWait() match {
+    new UserLoginDialog(clargs.user, connectedClient _).showAndWait() match {
       case opt if opt.isEmpty => sys.exit()
       case opt => 
         val (pwd, client) = opt.get
@@ -75,14 +88,8 @@ class XmppDiscordBridge(args: Array[String]) {
     val jdaClient = new JDABuilder(AccountType.BOT).setAudioEnabled(false).setAutoReconnect(true).
     addEventListener(awaitReady).setToken(clargs.discordToken).build()
     
-    val connConf = TcpConnectionConfiguration.builder.hostname(clargs.xmppServer).port(clargs.xmppPort).build()
     if (xmppClient == null) {
-      xmppClient = XmppClient.create(clargs.domain, connConf)
-      
-      clargs.domainAndResource.map(_.split("/")) match {
-        case Some(Array(domain, resource, _*)) => xmppClient.connect(Jid.ofDomainAndResource(domain, resource))
-        case _ => xmppClient.connect()
-      }
+      xmppClient = connectedClient()
       
       val res = xmppClient.login(clargs.user, new String(passwd))
       if (res != null) println(res.mkString(", "))
@@ -90,6 +97,10 @@ class XmppDiscordBridge(args: Array[String]) {
     
     val rosterManager = xmppClient.getManager(classOf[RosterManager])
     val vcardManager = xmppClient.getManager(classOf[VCardManager])
+    val offlineMessageManager = xmppClient.getManager(classOf[OfflineMessageManager])
+    Try {
+      println("offline message is supported? " + offlineMessageManager.isSupported.get)
+    }.failed foreach println
     
     trayIcon.showConnected()
     println("Contacts:")
@@ -109,9 +120,9 @@ class XmppDiscordBridge(args: Array[String]) {
         case Some(name) =>
           val contactWithName = new Contact(contact.getJid, name, contact.isPendingOut, contact.isApproved, contact.getSubscription, contact.getGroups)
           val newChannel = (name.split(" ").mkString("_") + "-" + contact.getJid).
-            replace('á', 'a').replace('í', 'i').replace('ú', 'u').replace('é', 'e').replace('ó', 'o').
-            replaceAll("[^a-zA-Z0-9]", "-").replaceAll("--+", "-").
-            dropWhile(c => c == '-' || c == '_').toLowerCase
+          replace('á', 'a').replace('í', 'i').replace('ú', 'u').replace('é', 'e').replace('ó', 'o').
+          replaceAll("[^a-zA-Z0-9]", "-").replaceAll("--+", "-").
+          dropWhile(c => c == '-' || c == '_').toLowerCase
             
           allChannels.find(_.getName == newChannel) match {
             case Some(c) =>
@@ -178,15 +189,15 @@ class XmppDiscordBridge(args: Array[String]) {
                 case "/delete all channels" =>
                   println("deleting all channels")
                   (allChannels - generalChannel) foreach (c => 
-                      c.delete().queue(_ => println(s"channel $c deleted"), ex => generalChannel.sendMessage(s"Failed to delete channel $c due to $ex").queue()))
+                    c.delete().queue(_ => println(s"channel $c deleted"), ex => generalChannel.sendMessage(s"Failed to delete channel $c due to $ex").queue()))
                 case "/delete all non bound channels" =>
                   println("deleting non bound channels")
                   (allChannels - generalChannel -- contactsToChannels.values.map(_._2)) foreach (c => 
-                      c.delete().queue(_ => println(s"channel $c deleted"), ex => generalChannel.sendMessage(s"Failed to delete channel $c due to $ex").queue()))
+                    c.delete().queue(_ => println(s"channel $c deleted"), ex => generalChannel.sendMessage(s"Failed to delete channel $c due to $ex").queue()))
                 case "/delete created channels" =>
                   println("deleting created channels")
                   contactsToChannels.values.map(_._2) foreach (c => 
-                      c.delete().queue(_ => println(s"channel $c deleted"), ex => generalChannel.sendMessage(s"Failed to delete channel $c due to $ex").queue()))
+                    c.delete().queue(_ => println(s"channel $c deleted"), ex => generalChannel.sendMessage(s"Failed to delete channel $c due to $ex").queue()))
 
                 case regex"/find (.+)$userName" =>
                   val patt = ".*?" + userName.toLowerCase + ".*"
